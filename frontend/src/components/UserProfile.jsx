@@ -134,7 +134,7 @@ const UserProfile = ({ user, token, onUpdateProfile }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 sm:p-8">
+    <div className="min-h-screen p-4 sm:p-8">
       <div className="max-w-xl mx-auto bg-white p-6 md:p-10 rounded-xl shadow-2xl mt-10">
         
         <h1 className="text-3xl font-bold text-gray-800 border-b pb-3 mb-8 flex items-center space-x-3">
@@ -185,7 +185,7 @@ const UserProfile = ({ user, token, onUpdateProfile }) => {
               </div>
             </div>
           </div>
-          <p className="mt-3 text-xl font-semibold text-gray-800">{userName}</p>
+          {/* <p className="mt-3 text-xl font-semibold text-gray-800">{userName}</p> */}
         </div>
 
         {/* 2. Profile Details Form */}
@@ -229,8 +229,9 @@ const UserProfile = ({ user, token, onUpdateProfile }) => {
             </div>
           </div>
 
-          {/* Save Button */}
-          {isEditingName && (
+          {/* Save Button - **FIX APPLIED HERE** */}
+          {/* The button now shows if *either* the name is being edited OR the avatar input is shown. */}
+          {(isEditingName || isEditingAvatar) && (
             <div className="pt-4 border-t mt-8">
               <button
                 type="submit"

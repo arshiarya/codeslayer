@@ -1,164 +1,260 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Heart, MessageCircle, Send, Mic, Flag, X } from 'lucide-react';
+// NOTE: You must install socket.io-client: `npm install socket.io-client`
+import { io } from 'socket.io-client'; 
 
-// Assuming shared components and API base URL
-import CommunityHeader from './CommunityHeader'; 
-const API_BASE_URL = "http://localhost:5050/api/stories"; 
+// Assuming shared components (removed use of CommunityHeader and other page logic)
+// const CommunityHeader = () => <div className="text-center py-4 text-lg font-bold">Anonymous Chat</div>; 
 
-const ReachOutPage = () => {
-    // --- STATE MANAGEMENT ---
-    const [posts, setPosts] = useState([]); // Will hold fetched posts/stories
-    const [messageText, setMessageText] = useState(''); // For the persistent post input
+const CHAT_API_BASE_URL = "http://localhost:5050/api";
+const SOCKET_SERVER_URL = "http://localhost:5050";
+const ROOM_ID = 1; // Hardcoded room ID to match PostgreSQL schema
+
+// --- AUTHENTICATION HELPER FUNCTIONS ---
+
+const getTokens = () => {
+    return {
+        accessToken: localStorage.getItem('jwtToken') || localStorage.getItem('authToken'),
+        refreshToken: localStorage.getItem('refreshToken')
+    };
+};
+
+const clearTokens = () => {
+    localStorage.removeItem('jwtToken');
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('refreshToken');
+};
+
+const refreshAccessToken = async (refreshToken) => {
+    if (!refreshToken) throw new Error("No refresh token available.");
+    
+    // Call the backend endpoint to exchange the refresh token
+    const response = await fetch(`${CHAT_API_BASE_URL}/auth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+    });
+
+    if (!response.ok) {
+        throw new Error("Token refresh failed.");
+    }
+
+    const data = await response.json();
+    const newAccessToken = data.accessToken;
+
+    // Store the new token (using 'jwtToken' as the primary key)
+    localStorage.setItem('jwtToken', newAccessToken); 
+    return newAccessToken;
+};
+
+// --- CORE AUTHENTICATED FETCH FUNCTION WITH RETRY LOGIC ---
+// This function will automatically attempt to refresh the token on a 401 error.
+const fetchAuthenticated = async (url, options, postStatusSetter) => {
+    let { accessToken, refreshToken } = getTokens();
+    
+    // Helper to perform the fetch request
+    const performFetch = (token) => fetch(url, {
+        ...options,
+        headers: {
+            ...options.headers,
+            'Authorization': `Bearer ${token}`
+        }
+    });
+    
+    // Utility to safely parse body, falling back to text if not JSON
+    const getBodyAndError = async (res) => {
+        try {
+            const data = await res.json();
+            // Look for common error keys in the JSON body
+            return { message: data.message || data.error || "Unknown JSON Error" };
+        } catch (e) {
+            // Backend likely returned plain text (the root of the user's issue)
+            return { message: await res.text() };
+        }
+    };
+
+    // 1. Initial attempt
+    let response = await performFetch(accessToken);
+
+    // 2. Check for Token Expiration (401)
+    if (response.status === 401) {
+        postStatusSetter({ type: 'info', message: 'Token expired. Attempting to renew session...' });
+
+        try {
+            // Attempt refresh
+            accessToken = await refreshAccessToken(refreshToken);
+
+            // Retry original request with new token
+            response = await performFetch(accessToken);
+
+        } catch (error) {
+            // Refresh failed (e.g., refresh token expired/revoked)
+            clearTokens();
+            postStatusSetter({ type: 'error', message: "Session expired. Please log in again." });
+            throw new Error("Session expired.");
+        }
+    }
+    
+    // 3. Final Check for Non-OK Status (e.g., 400, 403, 404, 500)
+    if (!response.ok) {
+        const errorData = await getBodyAndError(response);
+        // Use the message parsed from JSON or plain text
+        const errorMessage = errorData.message || `Server Error (${response.status})`;
+        throw new Error(errorMessage);
+    }
+    
+    return response; // Return the valid 200/201 response object
+};
+// -----------------------------------------------------------
+
+
+const ReachOutPage = () => { // Renamed component to ReachOutPage
+    // --- CHAT STATE ---
+    const [messages, setMessages] = useState([]); // List of live chat messages
+    const [messageText, setMessageText] = useState(''); // Input field text
     const [postStatus, setPostStatus] = useState({ type: '', message: '' });
 
+    // --- ANONYMITY & SOCKET STATE ---
+    const [anonymousName, setAnonymousName] = useState('Guest');
+    const [identityId, setIdentityId] = useState(null);
+    const [socket, setSocket] = useState(null);
+    const [isConnected, setIsConnected] = useState(false);
+    
+    // NEW STATE: Tracks if the component has finished token check
+    const [isAuthChecked, setIsAuthChecked] = useState(false); 
+
+    // --- MODERATION STATE ---
     const [showFlagModal, setShowFlagModal] = useState(false);
-    const [selectedPostId, setSelectedPostId] = useState(null);
+    const [selectedMessageId, setSelectedMessageId] = useState(null); 
     const [flagReason, setFlagReason] = useState('');
-    
-    // --- VOICE INPUT STATE ---
+
+    // --- UI/UTILITY STATE ---
     const [isListening, setIsListening] = useState(false);
+    const messagesEndRef = useRef(null);
+    const currentUserId = '12345'; 
 
-    const [replyingToPostId, setReplyingToPostId] = useState(null);
-    const [replyCommentContent, setReplyCommentContent] = useState('');
-
-    const currentUserId = '66f3e1b7f3d5b0a8c2f218a0'; // Mock User ID
+    // Scrolls to the bottom of the chat list
+    const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    };
     
-    // Utility functions for rendering populated user data (from ListenLearnPage)
-    const getAvatarSrc = (user) => (user?.avatarUrl || 'https://placehold.co/40x40/E8A287/FFFFFF?text=USER');
-    const getUsername = (user) => (user?.username || 'Community User');
-
-    // =======================================================
-    // 1. DATA FETCHING ON LOAD
-    // =======================================================
+    // --- 1. INITIAL SETUP: JOIN ROOM & CONNECT SOCKET ---
     useEffect(() => {
-        const fetchPosts = async () => {
+        const { accessToken } = getTokens();
+        
+        if (!accessToken) {
+             setPostStatus({ type: 'error', message: 'Authentication token is missing. Please log in.' });
+             setIsAuthChecked(true); 
+             return;
+        }
+
+        setIsAuthChecked(true); 
+        
+        // Function to join the room via HTTP API (get pseudonym)
+        const joinChat = async () => {
+            setPostStatus({ type: 'info', message: 'Authenticating anonymous identity...' });
+            
             try {
-                const response = await fetch(API_BASE_URL);
-                if (!response.ok) {
-                    throw new Error('Failed to fetch posts from API.');
-                }
+                // Now uses the robust fetchAuthenticated wrapper
+                const response = await fetchAuthenticated(
+                    `${CHAT_API_BASE_URL}/chat/join/${ROOM_ID}`,
+                    { method: 'POST', headers: { 'Content-Type': 'application/json' } },
+                    setPostStatus
+                );
+
                 const data = await response.json();
-                // Initialize the isLiked property for the frontend based on user session/history later, 
-                // but for now, just load the posts.
-                setPosts(data); 
+                
+                setIdentityId(data.identity_id);
+                setAnonymousName(data.anonymous_name);
+                setPostStatus({ type: 'success', message: `Joined as ${data.anonymous_name}. Connecting to live chat...` });
+
+                return data; 
             } catch (error) {
-                console.error("Error fetching posts:", error);
-                setPostStatus({ type: 'error', message: 'Could not load community posts.' });
+                console.error("Join Room Error:", error);
+                setPostStatus({ type: 'error', message: `Error: ${error.message}. You cannot chat.` });
+                return null;
             }
         };
 
-        fetchPosts();
+        const identityPromise = joinChat();
+
+        // Function to set up the WebSocket connection
+        const newSocket = io(SOCKET_SERVER_URL, {
+            withCredentials: true, 
+        });
+
+        newSocket.on('connect', () => {
+            setIsConnected(true);
+            setSocket(newSocket);
+            // After successful connect and identity lookup, join the specific room namespace
+            identityPromise.then(identity => {
+                // Use the successfully fetched identity_id if the component is mounted
+                if (identity && identity.identity_id) { 
+                    newSocket.emit('joinRoom', ROOM_ID, identity.identity_id);
+                }
+            });
+        });
+
+        newSocket.on('newMessage', (message) => {
+            // We use 'flex-col-reverse' in the CSS, so we prepend new messages
+            setMessages(prevMessages => [message, ...prevMessages]); 
+            scrollToBottom();
+        });
+
+        newSocket.on('disconnect', () => {
+            setIsConnected(false);
+            setPostStatus({ type: 'error', message: 'Disconnected from server.' });
+        });
+
+        return () => {
+            newSocket.disconnect();
+        };
     }, []); 
 
+    // Scroll to bottom whenever messages update
+    useEffect(scrollToBottom, [messages]);
+    
     // =======================================================
-    // 2. VOICE INPUT HANDLER (Web Speech API)
+    // 2. VOICE INPUT HANDLER (Simplified)
     // =======================================================
     const startVoiceInput = () => {
-        if (!('webkitSpeechRecognition' in window)) {
-            setPostStatus({ type: 'error', message: 'Voice input not supported by your browser.' });
+        // This remains a simplified stub for demonstration
+        setPostStatus({ type: 'info', message: 'Voice input active (functionality mocked).' });
+        setIsListening(true);
+        setTimeout(() => {
+             setIsListening(false);
+             setMessageText(prevText => (prevText + ' ' + 'Voice transcript example.').trim());
+             setPostStatus({ type: 'success', message: 'Voice input stopped.' });
+        }, 1500);
+    };
+
+    // =======================================================
+    // 3. CHAT HANDLERS
+    // =======================================================
+
+    // --- handleSendMessage (Uses Socket) ---
+    const handleSendMessage = (e) => {
+        e.preventDefault();
+        if (!messageText.trim() || !socket || !identityId || !isConnected) {
+            setPostStatus({ type: 'error', message: 'Cannot send. Not connected or missing identity.' });
             return;
         }
 
-        const recognition = new window.webkitSpeechRecognition();
-        recognition.continuous = false; // Only listen until a pause is detected
-        recognition.lang = 'en-US';
-
-        recognition.onstart = () => {
-            setIsListening(true);
-            setPostStatus({ type: 'info', message: 'Listening... start speaking now.' });
+        const messagePayload = {
+            identityId: identityId, 
+            roomId: ROOM_ID,
+            text: messageText.trim(),
         };
 
-        recognition.onerror = (event) => {
-            setIsListening(false);
-            console.error('Speech recognition error:', event.error);
-            if (event.error !== 'no-speech') {
-                setPostStatus({ type: 'error', message: `Voice error: ${event.error}. Ensure microphone is available.` });
-            } else {
-                setPostStatus({ type: 'error', message: `No speech detected. Try again.` });
-            }
-        };
-
-        recognition.onend = () => {
-            setIsListening(false);
-            setPostStatus({ type: 'success', message: 'Voice input stopped.' });
-        };
-
-        recognition.onresult = (event) => {
-            const transcript = event.results[0][0].transcript;
-            // Append the transcript to the existing message text
-            setMessageText(prevText => (prevText + ' ' + transcript).trim());
-        };
-
-        recognition.start();
-    };
-
-    // =======================================================
-    // 3. HANDLERS
-    // =======================================================
-
-    // --- UPDATED: handleLike with API CALL ---
-    const handleLike = async (postId) => {
-        setPostStatus({ type: 'info', message: 'Updating like status...' });
+        socket.emit('sendMessage', messagePayload);
         
-        // 1. Optimistically update local state (for fast UX)
-        let isCurrentlyLiked = false;
-        let newLikesCount = 0;
-
-        setPosts(prevPosts =>
-            prevPosts.map(post => {
-                if (post._id === postId) {
-                    // Toggle the visual state
-                    isCurrentlyLiked = !post.isLiked;
-                    newLikesCount = post.likes + (isCurrentlyLiked ? 1 : -1);
-                    return {
-                        ...post,
-                        likes: newLikesCount,
-                        isLiked: isCurrentlyLiked,
-                    };
-                }
-                return post;
-            })
-        );
-        
-        // 2. Call API to persist the change
-        try {
-            // Note: The API call logic (POST /:id/like) currently only increments.
-            // For a full system, you'd need a PUT or DELETE to handle unliking, 
-            // but we'll stick to the current POST /:id/like structure for now, 
-            // assuming the backend handles the toggle logic if needed, or simply increments.
-            
-            const response = await fetch(`${API_BASE_URL}/${postId}/like`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                // You might need to send userId if your backend uses it for tracking likes:
-                // body: JSON.stringify({ userId: currentUserId }),
-            });
-
-            const data = await response.json();
-
-            if (!response.ok) {
-                 // If API fails, revert the state change (ROLLBACK)
-                setPosts(prevPosts =>
-                    prevPosts.map(post =>
-                        post._id === postId
-                            ? { ...post, likes: post.likes + (isCurrentlyLiked ? -1 : 1), isLiked: !isCurrentlyLiked }
-                            : post
-                    )
-                );
-                throw new Error(data.message || 'Failed to update like on server.');
-            }
-            
-            setPostStatus({ type: 'success', message: 'Like status updated.' });
-
-        } catch (error) {
-            console.error('Like API Error:', error);
-            setPostStatus({ type: 'error', message: `Error: ${error.message}. Please try again.` });
-        }
+        // Clear input immediately
+        setMessageText(''); 
     };
-    // --- END UPDATED handleLike ---
-
-    const handleFlagClick = (postId) => {
-        setSelectedPostId(postId);
+    
+    // --- FLAG HANDLER (REVISED FOR POSTGRES MESSAGE ID) ---
+    const handleFlagClick = (messageId) => {
+        setSelectedMessageId(messageId); 
         setShowFlagModal(true);
         setFlagReason('');
     };
@@ -169,139 +265,85 @@ const ReachOutPage = () => {
     };
 
     const handleFlagSubmit = async () => {
-        if (!flagReason.trim() || !selectedPostId) return;
+        if (!flagReason.trim() || !selectedMessageId) return;
 
         setPostStatus({ type: 'info', message: 'Submitting flag for review...' });
 
         try {
-            const response = await fetch(`${API_BASE_URL}/${selectedPostId}/flag`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ reason: flagReason }), 
-            });
+            // Use fetchAuthenticated wrapper
+            const response = await fetchAuthenticated(
+                `${CHAT_API_BASE_URL}/moderation/flag/${selectedMessageId}`,
+                { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason: flagReason }), 
+                },
+                setPostStatus // Pass status setter for refresh messages
+            );
 
             const data = await response.json();
 
             if (!response.ok) {
-                throw new Error(data.message || 'Failed to flag post.');
+                const errorText = response.statusText || 'Unknown error';
+                throw new Error(data.message || `Failed to flag message. Server response: ${response.status} ${errorText}`);
             }
 
-            if (data.status === 'deleted') {
-                setPosts(prevPosts => prevPosts.filter(post => post._id !== selectedPostId));
-                setPostStatus({ type: 'success', message: data.message || 'Post deleted after reaching flag limit.' });
-            } else {
-                setPosts(prevPosts =>
-                    prevPosts.map(post =>
-                        post._id === selectedPostId
-                            ? { ...post, isFlagged: true } 
-                            : post
-                    )
-                );
-                setPostStatus({ type: 'success', message: data.message || 'Post flagged successfully.' });
-            }
+            setPostStatus({ type: 'success', message: data.status || 'Message flagged successfully.' });
         } catch (error) {
             console.error('Flag Submission Error:', error);
-            setPostStatus({ type: 'error', message: `Error flagging post: ${error.message}` });
+            // If the error message is "Session expired.", the user is already logged out via clearTokens()
+            setPostStatus({ type: 'error', message: error.message.includes("Session expired") ? error.message : `Error flagging: ${error.message}` });
         } finally {
             setShowFlagModal(false);
-            setSelectedPostId(null);
+            setSelectedMessageId(null);
             setFlagReason('');
         }
     };
 
     const handleFlagCancel = () => {
         setShowFlagModal(false);
-        setSelectedPostId(null);
+        setSelectedMessageId(null);
         setFlagReason('');
     };
     
-    const handleCreateNewPost = async (e) => {
-        e.preventDefault();
-        if (!messageText.trim()) return;
+    // --- Render Content ---
 
-        setPostStatus({ type: 'info', message: 'Posting conversation starter...' });
+    // If we haven't checked for the token yet, show a loading message
+    if (!isAuthChecked) {
+        return (
+            <div className="min-h-screen flex items-center justify-center font-sans bg-gradient-to-b from-[#B5D8EB] to-[#F4F8FB]">
+                <div className="text-xl font-semibold text-[#2B5A7A]">Checking authentication...</div>
+            </div>
+        );
+    }
 
-        try {
-            const response = await fetch(API_BASE_URL, { 
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: currentUserId, content: messageText.trim() }),
-            });
-            
-            const data = await response.json();
-
-            if (!response.ok) {
-                throw new Error(data.message || 'Failed to post message.');
-            }
-
-            setPosts(prevPosts => [data, ...prevPosts]);
-            setPostStatus({ type: 'success', message: 'Conversation starter posted successfully!' });
-            setMessageText(''); // Clear input
-
-        } catch (error) {
-            console.error('Post Creation Error:', error);
-            setPostStatus({ type: 'error', message: `Error posting message: ${error.message}` });
-        }
-    };
-    
-    const handlePostReply = async (postId) => {
-        if (!replyCommentContent.trim()) return;
-
-        setPostStatus({ type: 'info', message: 'Posting reply...' });
-
-        try {
-            const response = await fetch(`${API_BASE_URL}/${postId}/comment`, { 
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    userId: currentUserId,
-                    content: replyCommentContent.trim(),
-                }),
-            });
-
-            const data = await response.json();
-
-            if (!response.ok) {
-                throw new Error(data.message || 'Failed to post reply.');
-            }
-
-            setPosts(prevPosts =>
-                prevPosts.map(post =>
-                    post._id === data._id ? data : post 
-                )
-            );
-            
-            setPostStatus({ type: 'success', message: 'Reply posted successfully!' });
-            setReplyingToPostId(null); 
-            setReplyCommentContent('');
-            
-        } catch (error) {
-            console.error('Reply Post Error:', error);
-            setPostStatus({ type: 'error', message: `Error posting reply: ${error.message}` });
-        }
-    };
-    
-    const handleReplyToPost = (postId) => {
-        setReplyingToPostId(prevId => prevId === postId ? null : postId);
-        setReplyCommentContent(''); 
-    };
-
+    // If token check failed, show a big error message (the status message is already set)
+    const tokenMissing = !getTokens().accessToken;
+    if (tokenMissing) {
+         return (
+            <div className="min-h-screen flex items-center justify-center font-sans bg-gradient-to-b from-[#B5D8EB] to-[#F4F8FB]">
+                <div className="bg-white rounded-2xl p-8 shadow-xl max-w-md w-full text-center">
+                    <h2 className="text-2xl font-bold text-red-600 mb-4">Access Denied</h2>
+                    <p className="text-lg text-gray-700">Authentication token is missing. Please log in to access the anonymous chat.</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen font-sans bg-gradient-to-b from-[#B5D8EB] to-[#F4F8FB]">
-            <div className="container mx-auto px-4 py-8 max-w-5xl">
-                <CommunityHeader activeTab="ReachOutPage" />
+            <div className="container mx-auto px-4 py-8 max-w-xl">
 
-                <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200">
-                    <div className="flex items-center justify-between mb-10 relative z-10">
+                <div className="bg-white rounded-2xl p-6 shadow-xl border border-slate-200">
+                    <div className="flex items-center justify-between mb-6 relative z-10 border-b pb-4">
                         <div className="flex items-center gap-4">
-                            <div className="w-16 h-16 rounded-full flex items-center justify-center">
-                                {/* Using placeholder image URL */}
-                                <img src="https://placehold.co/80x80/FFF9C4/E8A287?text=🗣️" alt="Reach Out" className="w-20 h-20 object-contain" />
-                            </div>
+                            <img src="https://placehold.co/40x40/FFF9C4/E8A287?text=🗣️" alt="Chat" className="w-10 h-10 rounded-full" />
                             <div>
-                                <h2 className="text-2xl font-bold text-[#2B5A7A]">Reach Out & Be Heard</h2>
-                                <p className="text-sm text-gray-500">A supportive environment for sharing experiences</p>
+                                <h2 className="text-xl font-bold text-[#2B5A7A]">The Anonymous Chat</h2>
+                                <p className="text-xs text-gray-500">
+                                    You are: <span className="font-semibold text-blue-500">{anonymousName}</span> | 
+                                    Status: <span className={isConnected ? "text-green-500" : "text-red-500"}>{isConnected ? "Live" : "Connecting..."}</span>
+                                </p>
                             </div>
                         </div>
                     </div>
@@ -313,135 +355,42 @@ const ReachOutPage = () => {
                         </div>
                     )}
                     
-                    {/* Support Resources */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-                        {[
-                            { title: "Share Experiences", desc: "Express your thoughts" },
-                            { title: "Community Support", desc: "Connect with others" },
-                            { title: "Professional Resources", desc: "Access guidance" }
-                        ].map((action, index) => (
-                            <div key={index} className="bg-[#EDF3F8] p-4 rounded-xl">
-                                <h3 className="font-semibold text-[#2B5A7A] mb-1">{action.title}</h3>
-                                <p className="text-sm text-slate-600">{action.desc}</p>
-                            </div>
-                        ))}
-                    </div>
-
-                    {/* Post Feed */}
-                    <div className="space-y-6">
-                        {posts.map((post) => (
+                    {/* Chat Feed */}
+                    <div className="space-y-4 h-96 overflow-y-auto flex flex-col-reverse p-2">
+                        {[...messages].map((message) => (
                             <div
-                                key={post._id} // Use post._id
-                                className={`rounded-2xl p-5 bg-[#EDF3F8] relative ${
-                                    post.comments && post.comments.length > 0 ? 'border-l-4 border-[#B5D8EB] pl-6' : ''
-                                }`}
+                                key={message.messageId} // Use messageId
+                                className="rounded-xl p-3 bg-[#EDF3F8] relative transition duration-150 ease-in-out hover:shadow-md"
                             >
-                                <div className="flex items-center gap-3 mb-3">
-                                    <img
-                                        src={getAvatarSrc(post.userId)}
-                                        alt={getUsername(post.userId)}
-                                        className="w-8 h-8 rounded-full object-cover"
-                                    />
-                                    <div>
-                                        <p className="font-bold text-sm text-[#2B5A7A]">{getUsername(post.userId)}</p>
-                                        <p className="text-xs text-slate-500">{post.createdAt ? new Date(post.createdAt).toLocaleDateString() : 'just now'}</p>
-                                    </div>
+                                <div className="flex justify-between items-start mb-1">
+                                    <p className="font-bold text-sm text-[#2B5A7A]">{message.sender}</p>
+                                    <button
+                                        onClick={() => handleFlagClick(message.messageId)}
+                                        className="text-slate-400 hover:text-red-500 p-1 rounded-full transition"
+                                        title="Flag this message for review"
+                                    >
+                                        <Flag className="w-4 h-4" />
+                                    </button>
                                 </div>
 
-                                <p className="text-sm text-slate-700 mb-3">{post.content}</p>
-
-                                <div className="flex items-center gap-4 mt-3">
-                                    <button
-                                        onClick={() => handleLike(post._id)}
-                                        className={`flex items-center gap-2 ${
-                                            post.isLiked ? 'text-red-500' : 'text-slate-400 hover:text-red-400'
-                                        }`}
-                                    >
-                                        <Heart className={`w-5 h-5 ${post.isLiked ? 'fill-current' : ''}`} />
-                                        <span className="text-sm font-medium">{post.likes}</span>
-                                    </button>
-
-                                    <button 
-                                        onClick={() => handleReplyToPost(post._id)} // Toggles the dedicated reply box
-                                        className="flex items-center gap-2 text-blue-500 hover:text-blue-600"
-                                    >
-                                        <MessageCircle className="w-5 h-5" />
-                                        <span className="text-sm font-medium">Reply ({post.comments ? post.comments.length : 0})</span>
-                                    </button>
-
-                                    <button
-                                        onClick={() => handleFlagClick(post._id)}
-                                        className={`flex items-center gap-2 ${
-                                            post.isFlagged
-                                                ? 'text-yellow-500'
-                                                : 'text-slate-400 hover:text-yellow-500'
-                                        }`}
-                                        title={post.isFlagged ? 'Post has been flagged' : 'Flag this post'}
-                                    >
-                                        <Flag className="w-5 h-5" />
-                                    </button>
-                                </div>
-                                
-                                {/* RENDER DEDICATED REPLY INPUT BOX */}
-                                {replyingToPostId === post._id && (
-                                    <div className="mt-4 p-4 bg-white rounded-lg border border-slate-200">
-                                        <textarea
-                                            value={replyCommentContent}
-                                            onChange={(e) => setReplyCommentContent(e.target.value)}
-                                            placeholder="Write your direct reply here..."
-                                            rows="2"
-                                            className="w-full p-2 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 outline-none text-sm resize-none"
-                                        />
-                                        <div className="flex justify-end gap-2 mt-2">
-                                            <button
-                                                onClick={() => setReplyingToPostId(null)}
-                                                className="px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-100 rounded-full transition"
-                                            >
-                                                Cancel
-                                            </button>
-                                            <button
-                                                onClick={() => handlePostReply(post._id)} // Uses the new post reply handler
-                                                disabled={!replyCommentContent.trim()}
-                                                className={`px-3 py-1 text-xs font-medium text-white rounded-full transition ${
-                                                    replyCommentContent.trim()
-                                                        ? 'bg-blue-500 hover:bg-blue-600'
-                                                        : 'bg-gray-300 cursor-not-allowed'
-                                                }`}
-                                            >
-                                                Post Reply
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
-                                
-                                {/* Render Replies/Comments nested within the main post (unchanged) */}
-                                {post.comments && post.comments.length > 0 && (
-                                    <div className="mt-4 border-t border-slate-300 pt-3 space-y-3">
-                                        {post.comments.map((comment) => (
-                                            <div key={comment._id || comment.createdAt} className="flex gap-3 text-xs">
-                                                <img 
-                                                    src={getAvatarSrc(comment.userId)} 
-                                                    alt={getUsername(comment.userId)}
-                                                    className="w-6 h-6 rounded-full object-cover"
-                                                />
-                                                <div>
-                                                    <p className="font-bold text-[#2B5A7A] inline mr-2">{getUsername(comment.userId)}</p>
-                                                    <span className="text-slate-600">{comment.content}</span>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
+                                <p className="text-sm text-slate-700 break-words pr-8">{message.text}</p>
+                                <p className="text-xs text-slate-500 text-right mt-1">
+                                    {message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : 'sending...'}
+                                </p>
                             </div>
                         ))}
+                        <div ref={messagesEndRef} />
+                        {messages.length === 0 && (
+                            <div className="text-center text-gray-500 mt-10">Start the conversation!</div>
+                        )}
                     </div>
 
                     {/* Flag Modal (UNCHANGED) */}
                     {showFlagModal && (
                         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                             <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+                             <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-2xl">
                                 <h3 className="text-lg font-semibold text-[#2B5A7A] mb-4">
-                                    Flag this post
+                                    Flag this message
                                 </h3>
                                 <div className="mb-4">
                                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -493,39 +442,34 @@ const ReachOutPage = () => {
                         </div>
                     )}
 
-                    {/* Message Input (FOR CREATING A NEW MAIN POST) */}
-                    <div className="mt-10 pt-6 border-t border-slate-200">
-                        <label className="block text-sm font-medium text-[#2B5A7A] mb-2">
-                            Share what's on your mind
-                        </label>
-                        <form onSubmit={handleCreateNewPost}>
+                    {/* Message Input (FOR SENDING LIVE CHAT MESSAGE) */}
+                    <div className="mt-6 pt-4 border-t border-slate-200">
+                        <form onSubmit={handleSendMessage}>
                             <div className="flex items-center gap-3 bg-slate-50 rounded-full px-5 py-3 border border-slate-200">
                                 <input
                                     type="text"
-                                    placeholder="Type here..."
+                                    placeholder="Type your message..."
                                     value={messageText}
                                     onChange={(e) => setMessageText(e.target.value)}
                                     className="flex-1 bg-transparent border-none outline-none text-sm"
                                     required
+                                    disabled={!isConnected}
                                 />
                                 <button 
                                     type="button" 
                                     onClick={startVoiceInput}
                                     className={`text-slate-500 hover:text-slate-700 transition ${isListening ? 'text-red-500 animate-pulse' : ''}`}
+                                    disabled={!isConnected}
                                 >
                                     <Mic className="w-5 h-5" />
                                 </button>
-                                <button type="submit" className="text-blue-500 hover:text-blue-600">
+                                <button type="submit" className={`transition ${isConnected ? 'text-blue-500 hover:text-blue-600' : 'text-gray-400 cursor-not-allowed'}`} disabled={!isConnected}>
                                     <Send className="w-5 h-5" />
                                 </button>
                             </div>
                         </form>
                     </div>
                 </div>
-
-                <footer className="text-center mt-10 text-gray-600 text-sm">
-                    <p>Don't worry Be happy</p>
-                </footer>
             </div>
         </div>
     );

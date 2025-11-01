@@ -28,6 +28,9 @@ import mongoose from "mongoose";
 import cors from "cors";
 import bodyParser from "body-parser";
 import dotenv from "dotenv";
+// 🛠️ NEW: Import for HTTP and Socket.IO
+import http from 'http';
+import { Server } from 'socket.io'; 
 
 import { authRoutes } from "./routes/auth.js"; 
 import announcementsRoutes from "./routes/announcements.js";
@@ -40,19 +43,34 @@ import moodRoutes from "./routes/moodRoutes.js";
 import userStatsRoutes from "./routes/userStatsRoutes.js";
 
 import pool from "./config/db.js"; 
-// ⚠️ NEW: Import the authentication middleware
 import authenticateToken from './middleware/authenticateToken.js'; 
+// 🛠️ NEW: Import socket handler
+import { handleSockets } from './socketHandler.js'; 
+import { joinRoom, flagMessage } from './chatController.js'; 
 
-// CRITICAL FIX: Call dotenv.config() immediately after ALL imports
 dotenv.config();
 
 const app = express();
 const PORT = 5050;
 
-// ✅ Allow frontend to connect (adjust port if needed)
+// 🛠️ NEW: Create HTTP server instance from Express app
+const server = http.createServer(app); 
+
+// 🛠️ NEW: Initialize Socket.IO server on the HTTP server
+// CRITICAL FIX: Add CORS configuration for WebSockets
+const io = new Server(server, { 
+    cors: {
+        // Allows the frontend (running on 3000) to connect for WebSockets
+        origin: "http://localhost:3000", 
+        methods: ["GET", "POST"],
+        credentials: true
+    }
+}); 
+
+// ✅ Allow frontend to connect for HTTP requests (adjust port if needed)
 app.use(cors({ origin: "http://localhost:3000", credentials: true }));
 app.use(bodyParser.json());
-app.use(express.json()); // Ensure Express's parser is active
+app.use(express.json()); 
 
 // 🔌 MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI, {
@@ -61,7 +79,7 @@ mongoose.connect(process.env.MONGODB_URI, {
 }).then(() => console.log("✅ Connected to MongoDB"))
   .catch(err => console.error("❌ MongoDB error:", err));
 
-// Ensure refresh_tokens table exists in Postgres so refresh-token storage works reliably.
+// Ensure refresh_tokens table exists in Postgres
 async function ensureRefreshTokensTable() {
     try {
         const createSql = `
@@ -76,11 +94,8 @@ async function ensureRefreshTokensTable() {
         console.log('✅ refresh_tokens table ensured');
     } catch (err) {
         console.warn('Could not ensure refresh_tokens table at startup:', err.message);
-        // Don't crash the server — the auth route already falls back to in-memory store.
     }
 }
-
-// Call the ensure function at startup (non-blocking)
 ensureRefreshTokensTable();
 
 // ----------------------------------------------------
@@ -117,7 +132,6 @@ app.get('/api/counsellors/availability', async (req, res) => {
 
 // 2. 🔒 GET /api/bookings/my-appointments (Requires JWT)
 app.get('/api/bookings/my-appointments', authenticateToken, async (req, res) => {
-    // ID securely attached by the middleware
     const studentEnrollmentNumber = req.userId; 
 
     try {
@@ -152,7 +166,6 @@ app.get('/api/bookings/my-appointments', authenticateToken, async (req, res) => 
 
 // 3. 🔒 POST /api/bookings/create (Requires JWT + Transaction)
 app.post('/api/bookings/create', authenticateToken, async (req, res) => {
-    // CRITICAL FIX: Get the secure ID from the middleware, NOT req.body
     const studentEnrollmentNumber = req.userId;
     const { schedule_id, student_name } = req.body; 
     
@@ -215,6 +228,16 @@ app.post('/api/bookings/create', authenticateToken, async (req, res) => {
 
 
 // ----------------------------------------------------
+//          👤 ANONYMOUS CHAT ROUTES (PostgreSQL)
+// ----------------------------------------------------
+
+// 1. 🔒 POST /api/chat/join/:roomId (HTTP - Get/Create Pseudonym)
+app.post('/api/chat/join/:roomId', authenticateToken, joinRoom);
+
+// 2. 🔒 POST /api/moderation/flag/:messageId (HTTP - Submit Flag)
+app.post('/api/moderation/flag/:messageId', authenticateToken, flagMessage);
+
+// ----------------------------------------------------
 //                ⚡ EXISTING ROUTES
 // ----------------------------------------------------
 
@@ -270,7 +293,12 @@ app.post("/api/chatbot", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+// 🛠️ NEW: Attach Socket.IO handlers to the server instance
+handleSockets(io);
+
+// Listen on the HTTP server, not the Express app
+server.listen(PORT, () => {
   console.log(`✅ Server running on http://localhost:${PORT}`);
   console.log(`📡 Booking API endpoints active.`);
+  console.log(`💬 WebSocket server ready for chat connections.`);
 });
