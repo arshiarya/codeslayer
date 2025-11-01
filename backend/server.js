@@ -32,6 +32,7 @@ import dotenv from "dotenv";
 import http from 'http';
 import { Server } from 'socket.io'; 
 
+// --- ROUTE IMPORTS ---
 import { authRoutes } from "./routes/auth.js"; 
 import announcementsRoutes from "./routes/announcements.js";
 import storiesRoutes from "./routes/stories.js";
@@ -42,16 +43,16 @@ import assessmentRoutes from "./routes/assessmentRoutes.js";
 import moodRoutes from "./routes/moodRoutes.js"; 
 import userStatsRoutes from "./routes/userStatsRoutes.js";
 
-import pool from "./config/db.js"; 
-import authenticateToken from './middleware/authenticateToken.js'; 
-// 🛠️ NEW: Import socket handler
-import { handleSockets } from './socketHandler.js'; 
-import { joinRoom, flagMessage } from './chatController.js'; 
+// --- MIDDLEWARE/CONFIG IMPORTS ---
+import pool from "./config/db.js"; // PostgreSQL connection pool
+import authenticateToken from './middleware/authenticateToken.js'; // JWT Middleware
+import { handleSockets } from './socketHandler.js'; // Socket.IO handler
+import { joinRoom, flagMessage } from './chatController.js'; // Chat HTTP controllers
 
 dotenv.config();
 
 const app = express();
-const PORT = 5050;
+const PORT = process.env.PORT || 5050;
 
 // 🛠️ NEW: Create HTTP server instance from Express app
 const server = http.createServer(app); 
@@ -67,10 +68,18 @@ const io = new Server(server, {
     }
 }); 
 
+// ----------------------------------------------------
+//                🌐 CORE MIDDLEWARE
+// ----------------------------------------------------
+
 // ✅ Allow frontend to connect for HTTP requests (adjust port if needed)
 app.use(cors({ origin: "http://localhost:3000", credentials: true }));
 app.use(bodyParser.json());
 app.use(express.json()); 
+
+// ----------------------------------------------------
+//                🔗 DATABASE CONNECTION
+// ----------------------------------------------------
 
 // 🔌 MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI, {
@@ -130,7 +139,7 @@ app.get('/api/counsellors/availability', async (req, res) => {
     }
 });
 
-// 2. 🔒 GET /api/bookings/my-appointments (Requires JWT)
+// 2. 🔒 GET /api/bookings/my-appointments (Upcoming/Current - Requires JWT)
 app.get('/api/bookings/my-appointments', authenticateToken, async (req, res) => {
     const studentEnrollmentNumber = req.userId; 
 
@@ -164,7 +173,42 @@ app.get('/api/bookings/my-appointments', authenticateToken, async (req, res) => 
 });
 
 
-// 3. 🔒 POST /api/bookings/create (Requires JWT + Transaction)
+// 3. 🔒 GET /api/bookings/my-past-sessions (PREVIOUS SESSIONS - Fixes 404)
+app.get('/api/bookings/my-past-sessions', authenticateToken, async (req, res) => {
+    const studentEnrollmentNumber = req.userId; 
+
+    try {
+        const query = `
+            SELECT
+                br.booking_id,
+                br.status,
+                c.name AS counsellor_name,
+                c.title AS counsellor_title,
+                cs.schedule_date,
+                cs.schedule_time
+            FROM 
+                booking_records br
+            JOIN 
+                counsellor_schedule cs ON br.schedule_id = cs.schedule_id
+            JOIN 
+                counsellors c ON cs.counsellor_id = c.counsellor_id
+            WHERE 
+                br.student_id = $1
+                AND cs.schedule_date < CURRENT_DATE -- Only past dates
+                AND br.status IN ('Completed', 'Confirmed') 
+            ORDER BY 
+                cs.schedule_date DESC, cs.schedule_time DESC; 
+        `;
+        const { rows } = await pool.query(query, [studentEnrollmentNumber]);
+        res.json(rows);
+    } catch (err) {
+        console.error("Error fetching secure past student sessions:", err);
+        res.status(500).json({ error: "Failed to retrieve past session history." });
+    }
+});
+
+
+// 4. 🔒 POST /api/bookings/create (Requires JWT + Transaction)
 app.post('/api/bookings/create', authenticateToken, async (req, res) => {
     const studentEnrollmentNumber = req.userId;
     const { schedule_id, student_name } = req.body; 
@@ -293,8 +337,16 @@ app.post("/api/chatbot", async (req, res) => {
   }
 });
 
-// 🛠️ NEW: Attach Socket.IO handlers to the server instance
+// ----------------------------------------------------
+//                📡 SOCKET.IO SETUP
+// ----------------------------------------------------
+
+// 🛠️ Attach Socket.IO handlers to the server instance
 handleSockets(io);
+
+// ----------------------------------------------------
+//                  🚀 SERVER START
+// ----------------------------------------------------
 
 // Listen on the HTTP server, not the Express app
 server.listen(PORT, () => {
