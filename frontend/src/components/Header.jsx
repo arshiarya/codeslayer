@@ -1,15 +1,19 @@
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-// --- ADDED Menu and X icons for the hamburger functionality ---
 import { Smile, UserCircle, LogOut, LayoutDashboard, User, Menu, X } from 'lucide-react';
 
-// The component receives the onSignOut function from its parent (ProtectedLayout)
 const Header = ({ onSignOut }) => {
+    // 1. ⚙️ ALL HOOKS MUST BE CALLED UNCONDITIONALLY FIRST
     const location = useLocation();
-    // Existing state for the User Profile Dropdown
     const [isMenuOpen, setIsMenuOpen] = useState(false);
-    // --- NEW state for the Main Mobile Navigation Menu ---
     const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+
+    // 2. 🛑 CONDITIONAL LOGIC TO HIDE THE COMPONENT
+    // This return statement must come after all hook calls.
+    const PATH_TO_HIDE_HEADER = '/AdminDashboard';
+    if (location.pathname === PATH_TO_HIDE_HEADER) {
+        return null; 
+    }
 
     const navItems = [
         { name: 'Home', href: '/HomePage' },
@@ -19,26 +23,19 @@ const Header = ({ onSignOut }) => {
         { name: 'Resources', href: '/ArticlesPage' },
         { name: 'Track Mood', href: '/TrackMoodPage' },
         { name: 'Dashboard', href: '/WellnessDashboard' },
-
     ];
 
-    // Existing toggle for the User Profile Dropdown
     const toggleMenu = () => setIsMenuOpen(!isMenuOpen);
-
-    // --- NEW toggle function for the Main Mobile Navigation ---
     const toggleMobileNav = () => setIsMobileNavOpen(!isMobileNavOpen);
 
-    // Handles sign out action: calls the prop function and closes the menu
     const handleSignOutClick = () => {
         if (onSignOut) {
             onSignOut();
         }
-        // Close both menus
         setIsMenuOpen(false);
         setIsMobileNavOpen(false);
     };
 
-    // Handles link click: closes both menus
     const handleLinkClick = () => {
         setIsMenuOpen(false);
         setIsMobileNavOpen(false);
@@ -51,15 +48,14 @@ const Header = ({ onSignOut }) => {
                 {/* Logo/Brand Name */}
                 <div className="flex items-center space-x-2 text-blue-600 font-semibold text-lg ml-4">
                     <Link to="/" className="hover:text-blue-800 transition-colors">
-                        {/* Replaced 'BetterX' text with an image tag */}
-                        <img src="/logo.png" alt="BetterX Logo" className="h-10 w-auto" />
+                        <img src="/logo.png" alt="BetterX Logo" className="h- w-auto" />
                     </Link>
                 </div>
 
                 {/* Navigation Links and Profile Menu Container */}
-                <div className="flex items-center space-x-4"> {/* Adjusted space-x to 4 for mobile icon fitting */}
+                <div className="flex items-center space-x-4">
 
-                    {/* --- NEW: HAMBURGER/CLOSE ICON (Visible only on mobile) --- */}
+                    {/* NEW: HAMBURGER/CLOSE ICON (Visible only on mobile) */}
                     <button
                         className="md:hidden text-gray-600 hover:text-blue-600 transition-colors p-2 z-40"
                         onClick={toggleMobileNav}
@@ -84,14 +80,14 @@ const Header = ({ onSignOut }) => {
                                 className={`text-sm px-2 py-4 text-gray-600 hover:text-blue-500 transition-colors ${location.pathname === item.href
                                         ? 'font-semibold text-blue-700 border-b-2 border-blue-700'
                                         : 'border-b-2 border-transparent hover:border-blue-200'
-                                    }`}                    >
+                                    }`}
+                            >
                                 {item.name}
                             </Link>
                         ))}
                     </nav>
 
                     {/* User Profile Icon and Dropdown (Existing Logic) */}
-                    {/* Note: This button still controls the profile menu using isMenuOpen state */}
                     <div className="relative">
                         <button
                             onClick={toggleMenu}
@@ -144,22 +140,23 @@ const Header = ({ onSignOut }) => {
                 </div>
             </div>
 
-            {/* --- NEW: MOBILE NAVIGATION MENU CONTAINER --- */}
-            {/* This slides in from the left when the hamburger icon is clicked */}
+            {/* NEW: MOBILE NAVIGATION MENU CONTAINER */}
             <nav
                 id="mobile-nav-menu"
                 className={`md:hidden absolute top-14 left-0 w-full bg-white shadow-xl transition-transform duration-300 ease-in-out z-40 ${isMobileNavOpen ? 'translate-x-0' : '-translate-x-full'
-                    }`}      >
+                    }`}
+            >
                 <div className="flex flex-col p-4 space-y-2">
                     {navItems.map((item) => (
                         <Link
                             key={item.name}
                             to={item.href}
-                            onClick={handleLinkClick} // Closes the mobile nav when a link is clicked
+                            onClick={handleLinkClick}
                             className={`block px-3 py-2 text-base rounded-lg text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors ${location.pathname === item.href
                                     ? 'font-semibold text-blue-700 bg-blue-100'
                                     : ''
-                                }`}                >
+                                }`}
+                        >
                             {item.name}
                         </Link>
                     ))}
