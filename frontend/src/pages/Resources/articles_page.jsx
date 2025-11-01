@@ -1,92 +1,9 @@
 import React from "react";
-// Merged all icon imports from lucide-react
-import { Clock, Star, Bot, Calendar, AlertTriangle } from "lucide-react";
-
-// --- Inlined SupportOptions Component ---
-// (This was previously in "./support_condition")
-const SupportOptions = () => {
-  const options = [
-    {
-      title: "AI Chat Buddy (Instant Help)",
-      icon: <Bot size={22} />,
-      desc: "Talk to your AI Buddy anytime — private, judgment-free, and available 24/7.",
-      color: "bg-blue-100",
-    },
-    {
-      title: "Book a Counseling Session",
-      icon: <Calendar size={22} />,
-      desc: "Connect with certified counselors for one-on-one personalized support.",
-      color: "bg-blue-200",
-    },
-    {
-      title: "Emergency Help",
-      icon: <AlertTriangle size={22} />,
-      desc: "In crisis or need urgent support? Contact campus emergency or helpline now.",
-      color: "bg-red-200",
-    },
-  ];
-
-  return (
-    <div className="mt-12">
-      <h2 className="text-center text-xl font-semibold text-gray-800 mb-3">
-        Need More Personalized Support?
-      </h2>
-      <p className="text-center text-gray-600 mb-6">
-        These resources are a great start, but if you need more guidance, we’re here to help.
-      </p>
-
-      <div className="grid sm:grid-cols-3 gap-5">
-        {options.map((opt) => (
-          <div
-            key={opt.title}
-            className={`${opt.color} p-5 rounded-2xl shadow-sm text-center`}
-          >
-            <div className="flex justify-center mb-2 text-blue-800">{opt.icon}</div>
-            <h3 className="font-semibold mb-2">{opt.title}</h3>
-            <p className="text-sm text-gray-700">{opt.desc}</p>
-          </div>
-        ))}
-      </div>
-
-       
-      <footer className="text-center mt-10 text-gray-600 text-sm">
-                <p>Don't worry Be happy</p>
-            </footer>
-    </div>
-  );
-}
-
-// --- Inlined ResourcesNav Component ---
-// (This was previously in "../../components/ResourcesNav")
-// Created a placeholder navigation bar based on context
-const ResourcesNav = () => {
-  // We're on the Articles page, so make it the "active" link
-  return (
-    <div className="mb-8 flex justify-center gap-2 sm:gap-4">
-      <a 
-        href="#" 
-        className="bg-white text-blue-700 px-3 py-2 sm:px-4 rounded-lg shadow-md font-medium text-sm sm:text-base"
-      >
-        Articles
-      </a>
-      <a 
-        href="#" 
-        className="bg-white/70 text-gray-600 hover:bg-white hover:text-blue-700 px-3 py-2 sm:px-4 rounded-lg shadow-sm font-medium transition text-sm sm:text-base"
-      >
-        Videos
-      </a>
-      <a 
-        href="#" 
-        className="bg-white/70 text-gray-600 hover:bg-white hover:text-blue-700 px-3 py-2 sm:px-4 rounded-lg shadow-sm font-medium transition text-sm sm:text-base"
-      >
-        Audio
-      </a>
-    </div>
-  );
-};
+import { Clock, Star } from "lucide-react";
+import SupportOptions from "./support_condition";
+import ResourcesNav from "../../components/ResourcesNav";
 
 
-// --- Main ArticlesPage Component ---
 const ArticlesPage = () => {
   const articles = [
     {
@@ -111,7 +28,7 @@ const ArticlesPage = () => {
       rating: 4.7,
       desc: "Simple mindfulness techniques to improve focus and reduce stress.",
       tags: ["Mindfulness", "Meditation", "Focus"],
-      link: "httpsI://childmind.org/article/the-power-of-mindfulness/",
+      link: "https://childmind.org/article/the-power-of-mindfulness/",
     },
     {
       title: "The Art of Stillness: Ancient Wisdom for Inner Peace",
@@ -127,7 +44,7 @@ const ArticlesPage = () => {
       rating: 4.9,
       desc: "Tap into your innate ‘Shakti’ energy to build confidence and navigate university life.",
       tags: ["Self Power", "Divine", "Growth"],
-      link: "httpsClick://kripalu.org/living-kripalu/shakti-power-within-you",
+      link: "https://kripalu.org/living-kripalu/shakti-power-within-you",
     },
     {
       title: "Cosmic Calm: Easing Anxiety with a Broader View",
@@ -196,3 +113,8 @@ const ArticlesPage = () => {
 };
 
 export default ArticlesPage;
+
+
+
+
+
