@@ -12,12 +12,17 @@ const ROOM_ID = 1; // Hardcoded room ID to match PostgreSQL schema
 
 // --- AUTHENTICATION HELPER FUNCTIONS ---
 
+// --- AUTHENTICATION HELPER FUNCTIONS (UPDATED) ---
+
 const getTokens = () => {
     return {
-        accessToken: localStorage.getItem('jwtToken') || localStorage.getItem('authToken'),
+        // ADDED 'token' to the retrieval check 
+        accessToken: localStorage.getItem('jwtToken') || localStorage.getItem('authToken') || localStorage.getItem('token'),
         refreshToken: localStorage.getItem('refreshToken')
     };
 };
+
+// ... (rest of your component code)
 
 const clearTokens = () => {
     localStorage.removeItem('jwtToken');
