@@ -48,7 +48,8 @@ const Header = ({ onSignOut }) => {
                 {/* Logo/Brand Name */}
                 <div className="flex items-center space-x-2 text-blue-600 font-semibold text-lg ml-4">
                     <Link to="/" className="hover:text-blue-800 transition-colors">
-                        <img src="/logo.png" alt="BetterX Logo" className="h- w-auto" />
+                    <img src="/logo.png" alt="BetterX Logo" className="h-8 w-auto" />
+
                     </Link>
                 </div>
 
