@@ -58,6 +58,7 @@ const AnnouncementsPage = () => {
           <div className="flex items-center justify-between mb-10 relative z-10">
             <div className="flex items-center gap-4">
               <div className="w-20 h-20 rounded-full flex items-center justify-center">
+                {/* Note: The image source '/announcements.png' is relative and assumes the file exists. */}
                 <img src="/announcements.png" alt="Announcements" className="w-20 h-20 object-contain" />
               </div>
               <div>
