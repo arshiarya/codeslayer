@@ -1,4 +1,3 @@
-// socketHandler.js
 import pool from "./config/db.js";
 
 export function handleSockets(io) {
@@ -10,11 +9,14 @@ export function handleSockets(io) {
       if (!roomId || !identityId) return;
 
       socket.join(`room-${roomId}`);
+      // Store identity and room ID directly on the socket object
       socket.identityId = identityId;
       socket.roomId = roomId;
 
       console.log(`👥 User ${identityId} joined room-${roomId}`);
-      socket.emit("joinedRoom", { success: true, roomId });
+      
+      // 🌟 Confirmation for the client (now listened to in ReachOutPage.js) 🌟
+      socket.emit("joinedRoom", { success: true, roomId }); 
     });
 
     // ✅ Send Message
@@ -23,7 +25,13 @@ export function handleSockets(io) {
       const roomId = socket.roomId;
       const identityId = socket.identityId;
 
-      if (!text || !roomId || !identityId) return;
+      if (!text || !roomId || !identityId) {
+        // Emit error message if required data is missing
+        socket.emit("errorMessage", {
+            error: "Message could not be sent. Missing room or identity data.",
+        });
+        return;
+      }
 
       try {
         // 1️⃣ Save message in DB
@@ -58,8 +66,9 @@ export function handleSockets(io) {
         io.to(`room-${roomId}`).emit("newMessage", messagePayload);
       } catch (error) {
         console.error("❌ Error sending message:", error);
+        // 🌟 CRITICAL: Emit the error message back to the client 🌟
         socket.emit("errorMessage", {
-          error: "Message could not be sent. Please try again.",
+          error: `Database/Server Error: ${error.message}`, // Pass the specific error
         });
       }
     });

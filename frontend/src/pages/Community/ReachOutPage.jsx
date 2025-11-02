@@ -1,28 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Heart, MessageCircle, Send, Mic, Flag, X } from 'lucide-react';
-// NOTE: You must install socket.io-client: `npm install socket.io-client`
 import { io } from 'socket.io-client'; 
-
-// Assuming shared components (removed use of CommunityHeader and other page logic)
-// const CommunityHeader = () => <div className="text-center py-4 text-lg font-bold">Anonymous Chat</div>; 
 
 const CHAT_API_BASE_URL = "http://localhost:5050/api";
 const SOCKET_SERVER_URL = "http://localhost:5050";
-const ROOM_ID = 1; // Hardcoded room ID to match PostgreSQL schema
+const ROOM_ID = 1;
 
 // --- AUTHENTICATION HELPER FUNCTIONS ---
-
-// --- AUTHENTICATION HELPER FUNCTIONS (UPDATED) ---
-
 const getTokens = () => {
     return {
-        // ADDED 'token' to the retrieval check 
         accessToken: localStorage.getItem('jwtToken') || localStorage.getItem('authToken') || localStorage.getItem('token'),
         refreshToken: localStorage.getItem('refreshToken')
     };
 };
-
-// ... (rest of your component code)
 
 const clearTokens = () => {
     localStorage.removeItem('jwtToken');
@@ -33,7 +23,6 @@ const clearTokens = () => {
 const refreshAccessToken = async (refreshToken) => {
     if (!refreshToken) throw new Error("No refresh token available.");
     
-    // Call the backend endpoint to exchange the refresh token
     const response = await fetch(`${CHAT_API_BASE_URL}/auth/token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -46,18 +35,13 @@ const refreshAccessToken = async (refreshToken) => {
 
     const data = await response.json();
     const newAccessToken = data.accessToken;
-
-    // Store the new token (using 'jwtToken' as the primary key)
     localStorage.setItem('jwtToken', newAccessToken); 
     return newAccessToken;
 };
 
-// --- CORE AUTHENTICATED FETCH FUNCTION WITH RETRY LOGIC ---
-// This function will automatically attempt to refresh the token on a 401 error.
 const fetchAuthenticated = async (url, options, postStatusSetter) => {
     let { accessToken, refreshToken } = getTokens();
     
-    // Helper to perform the fetch request
     const performFetch = (token) => fetch(url, {
         ...options,
         headers: {
@@ -66,57 +50,45 @@ const fetchAuthenticated = async (url, options, postStatusSetter) => {
         }
     });
     
-    // Utility to safely parse body, falling back to text if not JSON
     const getBodyAndError = async (res) => {
         try {
             const data = await res.json();
-            // Look for common error keys in the JSON body
             return { message: data.message || data.error || "Unknown JSON Error" };
         } catch (e) {
-            // Backend likely returned plain text (the root of the user's issue)
             return { message: await res.text() };
         }
     };
 
-    // 1. Initial attempt
     let response = await performFetch(accessToken);
 
-    // 2. Check for Token Expiration (401)
     if (response.status === 401) {
         postStatusSetter({ type: 'info', message: 'Token expired. Attempting to renew session...' });
 
         try {
-            // Attempt refresh
             accessToken = await refreshAccessToken(refreshToken);
-
-            // Retry original request with new token
             response = await performFetch(accessToken);
-
         } catch (error) {
-            // Refresh failed (e.g., refresh token expired/revoked)
             clearTokens();
             postStatusSetter({ type: 'error', message: "Session expired. Please log in again." });
             throw new Error("Session expired.");
         }
     }
     
-    // 3. Final Check for Non-OK Status (e.g., 400, 403, 404, 500)
     if (!response.ok) {
         const errorData = await getBodyAndError(response);
-        // Use the message parsed from JSON or plain text
         const errorMessage = errorData.message || `Server Error (${response.status})`;
         throw new Error(errorMessage);
     }
     
-    return response; // Return the valid 200/201 response object
+    return response;
 };
 // -----------------------------------------------------------
 
 
-const ReachOutPage = () => { // Renamed component to ReachOutPage
+const ReachOutPage = () => {
     // --- CHAT STATE ---
-    const [messages, setMessages] = useState([]); // List of live chat messages
-    const [messageText, setMessageText] = useState(''); // Input field text
+    const [messages, setMessages] = useState([]);
+    const [messageText, setMessageText] = useState('');
     const [postStatus, setPostStatus] = useState({ type: '', message: '' });
 
     // --- ANONYMITY & SOCKET STATE ---
@@ -124,8 +96,6 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
     const [identityId, setIdentityId] = useState(null);
     const [socket, setSocket] = useState(null);
     const [isConnected, setIsConnected] = useState(false);
-    
-    // NEW STATE: Tracks if the component has finished token check
     const [isAuthChecked, setIsAuthChecked] = useState(false); 
 
     // --- MODERATION STATE ---
@@ -138,7 +108,6 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
     const messagesEndRef = useRef(null);
     const currentUserId = '12345'; 
 
-    // Scrolls to the bottom of the chat list
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     };
@@ -155,12 +124,10 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
 
         setIsAuthChecked(true); 
         
-        // Function to join the room via HTTP API (get pseudonym)
         const joinChat = async () => {
             setPostStatus({ type: 'info', message: 'Authenticating anonymous identity...' });
             
             try {
-                // Now uses the robust fetchAuthenticated wrapper
                 const response = await fetchAuthenticated(
                     `${CHAT_API_BASE_URL}/chat/join/${ROOM_ID}`,
                     { method: 'POST', headers: { 'Content-Type': 'application/json' } },
@@ -183,7 +150,6 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
 
         const identityPromise = joinChat();
 
-        // Function to set up the WebSocket connection
         const newSocket = io(SOCKET_SERVER_URL, {
             withCredentials: true, 
         });
@@ -191,19 +157,34 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
         newSocket.on('connect', () => {
             setIsConnected(true);
             setSocket(newSocket);
-            // After successful connect and identity lookup, join the specific room namespace
+            
             identityPromise.then(identity => {
-                // Use the successfully fetched identity_id if the component is mounted
                 if (identity && identity.identity_id) { 
                     newSocket.emit('joinRoom', ROOM_ID, identity.identity_id);
                 }
             });
         });
 
+        // 🌟 CHANGE 1: Listen for the server's join confirmation 🌟
+        newSocket.on('joinedRoom', (data) => {
+            if (data.success) {
+                setPostStatus(prev => ({ 
+                    type: 'success', 
+                    // Only overwrite the status if the prior message wasn't an error
+                    message: prev.type !== 'error' ? 'Successfully connected to live chat!' : prev.message 
+                }));
+            }
+        });
+
         newSocket.on('newMessage', (message) => {
-            // We use 'flex-col-reverse' in the CSS, so we prepend new messages
             setMessages(prevMessages => [message, ...prevMessages]); 
             scrollToBottom();
+        });
+        
+        // 🌟 CHANGE 2: Listen for server-sent errors 🌟
+        newSocket.on('errorMessage', (data) => {
+            console.error("Socket Error from Server:", data.error);
+            setPostStatus({ type: 'error', message: `Chat Error: ${data.error}` });
         });
 
         newSocket.on('disconnect', () => {
@@ -216,14 +197,10 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
         };
     }, []); 
 
-    // Scroll to bottom whenever messages update
+    // ... (rest of the component functions remain unchanged)
     useEffect(scrollToBottom, [messages]);
     
-    // =======================================================
-    // 2. VOICE INPUT HANDLER (Simplified)
-    // =======================================================
     const startVoiceInput = () => {
-        // This remains a simplified stub for demonstration
         setPostStatus({ type: 'info', message: 'Voice input active (functionality mocked).' });
         setIsListening(true);
         setTimeout(() => {
@@ -233,11 +210,6 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
         }, 1500);
     };
 
-    // =======================================================
-    // 3. CHAT HANDLERS
-    // =======================================================
-
-    // --- handleSendMessage (Uses Socket) ---
     const handleSendMessage = (e) => {
         e.preventDefault();
         if (!messageText.trim() || !socket || !identityId || !isConnected) {
@@ -253,11 +225,9 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
 
         socket.emit('sendMessage', messagePayload);
         
-        // Clear input immediately
         setMessageText(''); 
     };
     
-    // --- FLAG HANDLER (REVISED FOR POSTGRES MESSAGE ID) ---
     const handleFlagClick = (messageId) => {
         setSelectedMessageId(messageId); 
         setShowFlagModal(true);
@@ -275,7 +245,6 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
         setPostStatus({ type: 'info', message: 'Submitting flag for review...' });
 
         try {
-            // Use fetchAuthenticated wrapper
             const response = await fetchAuthenticated(
                 `${CHAT_API_BASE_URL}/moderation/flag/${selectedMessageId}`,
                 { 
@@ -283,7 +252,7 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ reason: flagReason }), 
                 },
-                setPostStatus // Pass status setter for refresh messages
+                setPostStatus
             );
 
             const data = await response.json();
@@ -296,7 +265,6 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
             setPostStatus({ type: 'success', message: data.status || 'Message flagged successfully.' });
         } catch (error) {
             console.error('Flag Submission Error:', error);
-            // If the error message is "Session expired.", the user is already logged out via clearTokens()
             setPostStatus({ type: 'error', message: error.message.includes("Session expired") ? error.message : `Error flagging: ${error.message}` });
         } finally {
             setShowFlagModal(false);
@@ -311,9 +279,8 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
         setFlagReason('');
     };
     
-    // --- Render Content ---
+    // --- Render Content (UNCHANGED) ---
 
-    // If we haven't checked for the token yet, show a loading message
     if (!isAuthChecked) {
         return (
             <div className="min-h-screen flex items-center justify-center font-sans bg-gradient-to-b from-[#B5D8EB] to-[#F4F8FB]">
@@ -322,7 +289,6 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
         );
     }
 
-    // If token check failed, show a big error message (the status message is already set)
     const tokenMissing = !getTokens().accessToken;
     if (tokenMissing) {
          return (
@@ -360,11 +326,11 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
                         </div>
                     )}
                     
-                    {/* Chat Feed */}
+                    {/* Chat Feed (UNCHANGED) */}
                     <div className="space-y-4 h-96 overflow-y-auto flex flex-col-reverse p-2">
                         {[...messages].map((message) => (
                             <div
-                                key={message.messageId} // Use messageId
+                                key={message.messageId}
                                 className="rounded-xl p-3 bg-[#EDF3F8] relative transition duration-150 ease-in-out hover:shadow-md"
                             >
                                 <div className="flex justify-between items-start mb-1">
@@ -447,7 +413,7 @@ const ReachOutPage = () => { // Renamed component to ReachOutPage
                         </div>
                     )}
 
-                    {/* Message Input (FOR SENDING LIVE CHAT MESSAGE) */}
+                    {/* Message Input (UNCHANGED) */}
                     <div className="mt-6 pt-4 border-t border-slate-200">
                         <form onSubmit={handleSendMessage}>
                             <div className="flex items-center gap-3 bg-slate-50 rounded-full px-5 py-3 border border-slate-200">
