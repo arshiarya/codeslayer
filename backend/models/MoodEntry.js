@@ -1,31 +1,18 @@
-import mongoose from 'mongoose'; // Change 'require' to 'import'
+// MoodEntry model removed (project uses PostgreSQL for mood tracking).
+// This file keeps a minimal in-memory placeholder in case code imports it.
 
-const MoodEntrySchema = new mongoose.Schema({
-  // Links the entry to the user who created it (ID from the JWT)
-  userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User', // Reference your User model here
-    required: true,
-  },
-  // The mood name selected from the frontend
-  mood: {
-    type: String,
-    required: [true, 'Mood selection is required'],
-    enum: ['Happy', 'Calm', 'Neutral', 'Sad', 'Anxious'], // Ensures only valid moods are saved
-  },
-  // The optional note/reflection from the user
-  note: {
-    type: String,
-    trim: true,
-    maxlength: 500, // Good practice to limit text length
-  },
-  // Automatically records the date/time of the entry
-  date: {
-    type: Date,
-    default: Date.now,
+let _entries = [];
+let _id = 1;
+
+class MoodEntry {
+  constructor(obj={}) { Object.assign(this, obj); }
+  async save() {
+    if (!this._id) this._id = String(_id++);
+    this.createdAt = new Date();
+    _entries.push(this);
+    return this;
   }
-}, { timestamps: true }); // 'timestamps: true' adds createdAt and updatedAt fields
+  static async find(filter={}){ return _entries.slice(); }
+}
 
-const MoodEntry = mongoose.model('MoodEntry', MoodEntrySchema);
-
-export default MoodEntry; // Change 'module.exports' to 'export default'
+export default MoodEntry;
