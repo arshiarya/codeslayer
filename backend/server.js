@@ -50,7 +50,7 @@ import { joinRoom, flagMessage } from './chatController.js'; // Chat HTTP contro
 // Import new community routes
 import communityPostsRoutes from './routes/communityPosts.js';
 import reachOutRoutes from './routes/reachOutRoutes.js';
-
+import mongoose from 'mongoose'; // 🛠️ NEW: Import Mongoose for MongoDB
 dotenv.config();
 
 const app = express();
@@ -58,7 +58,22 @@ const PORT = process.env.PORT || 5050;
 
 // 🛠️ NEW: Create HTTP server instance from Express app
 const server = http.createServer(app); 
+const MONGO_URI = process.env.MONGO_URI;
 
+if (MONGO_URI) {
+    mongoose.connect(MONGO_URI)
+        .then(() => {
+            console.log('✅ MongoDB connected successfully!');
+            // You can call ensure-table functions for Mongo models here if needed
+        })
+        .catch(err => {
+            console.error('❌ MongoDB connection error:', err.message);
+            // Optionally exit the process if MongoDB is critical
+            // process.exit(1); 
+        });
+} else {
+    console.warn('⚠️ MONGO_URI not found. MongoDB features will be disabled.');
+}
 // 🛠️ NEW: Initialize Socket.IO server on the HTTP server
 // CRITICAL FIX: Add CORS configuration for WebSockets
 const io = new Server(server, { 

@@ -51,14 +51,13 @@ const AnnouncementsPage = () => {
     <div className="min-h-screen font-sans bg-gradient-to-b from-[#B5D8EB] to-[#F4F8FB]">
       <div className="container mx-auto px-4 py-8 max-w-5xl">
         {/* Header */}
-        <CommunityHeader activeTab="AnnouncementsPage" />
+        <CommunityHeader activeTab="announcements" />
 
         {/* Content Area */}
         <div className="bg-white rounded-2xl p-8 shadow-sm border border-slate-200 min-h-96">
           <div className="flex items-center justify-between mb-10 relative z-10">
             <div className="flex items-center gap-4">
               <div className="w-20 h-20 rounded-full flex items-center justify-center">
-                {/* Note: Ensure you have an image at /announcements.png or replace with an icon/placeholder */}
                 <img src="/announcements.png" alt="Announcements" className="w-20 h-20 object-contain" />
               </div>
               <div>
